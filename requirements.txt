@@ -9,3 +9,7 @@ wikipedia==1.4.0
 pyjokes==0.6.0
 pywhatkit==5.1
 pillow==8.4.0
+PyAudio
+opencv-python
+numpy
+mediapipe

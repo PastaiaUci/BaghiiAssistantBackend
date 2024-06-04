@@ -30,6 +30,7 @@ def take_command():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
         print("Listening...")
+        speak("Listening")
         recognizer.pause_threshold = 1
         recognizer.adjust_for_ambient_noise(source, duration=0.5)
         audio = recognizer.listen(source)
