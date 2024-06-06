@@ -1,9 +1,10 @@
-from flask import Flask, request, jsonify, session
+from flask import request, jsonify, session
+from flask_socketio import SocketIO
 from flask_pymongo import PyMongo
+from flask import Flask
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_session import Session
-from flask_socketio import SocketIO, emit
 import threading
 import subprocess
 import os
@@ -11,34 +12,41 @@ import signal
 import cv2
 import base64
 import numpy as np
-import pyautogui
+from bson.json_util import dumps
 from hand_gesture.hand_track_module import HandDetector
 from hand_gesture.gesture_control import GestureControl
+from face_recognition_module.face_recognition_module import process_face_recognition, handle_face_login
+
 
 app = Flask(__name__)
 
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000")
+
 app.config['SECRET_KEY'] = 'supersecretkey'
 app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_FILE_DIR'] = './flask_session/'
 app.config['SESSION_PERMANENT'] = False
 app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = False  # Set to True in production
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:3000"}})
+
 Session(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
 
 voice_assistant_process = None
 last_known_hand_position = None
 
-app.config["MONGO_URI"] = "mongodb://localhost:27017/YourDatabase"
+app.config["MONGO_URI"] = "mongodb://localhost:27017/BaghiiAssistant"
 mongo = PyMongo(app)
 
 detector = HandDetector(maxHands=1)
 
-# USERS ROUTES
 @app.route('/users', methods=['GET'])
 def get_users():
     users = mongo.db.users.find()
-    return jsonify(list(users)), 200
+    return dumps(users), 200
 
 @app.route('/users', methods=['POST'])
 def add_user():
@@ -53,12 +61,31 @@ def add_user():
 
 @app.route('/login', methods=['POST'])
 def login_user():
-    user_data = request.json
-    user = mongo.db.users.find_one({'username': user_data['username']})
-    if user and check_password_hash(user['password'], user_data['password']):
-        session['username'] = user['username']
-        return jsonify({"msg": "Login successful"}), 200
-    return jsonify({"msg": "Invalid username or password"}), 401
+    try:
+        user_data = request.json
+        username = user_data.get('username')
+        password = user_data.get('password')
+
+        if not username or not password:
+            return jsonify({"msg": "Username and password are required"}), 400
+
+        user = mongo.db.users.find_one({'username': username})
+        
+        if user:
+            if check_password_hash(user['password'], password):
+                session['username'] = user['username']
+                print(f"User {username} logged in successfully, session: {session}")
+                return jsonify({"msg": "Login successful"}), 200
+            else:
+                print(f"Password mismatch for user {username}")
+        else:
+            print(f"User {username} not found")
+
+        return jsonify({"msg": "Invalid username or password"}), 401
+
+    except Exception as e:
+        print(f"Error during login: {e}")
+        return jsonify({"msg": "Internal server error"}), 500
 
 @app.route('/logout', methods=['POST'])
 def logout_user():
@@ -68,11 +95,11 @@ def logout_user():
 @app.route('/session', methods=['GET'])
 def get_session():
     username = session.get('username')
+    print(f"Fetching session, session: {session}")
     if username:
         return jsonify({"username": username}), 200
     return jsonify({"msg": "No active session"}), 401
 
-# VOICE ASSISTANT ROUTES 
 @app.route('/start_voice_assistant', methods=['POST'])
 def start_voice_assistant():
     global voice_assistant_process
@@ -125,16 +152,38 @@ def handle_frame(data):
         np_img = np.frombuffer(img_data, dtype=np.uint8)
         img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
         mode = data.get('mode')
-        
+
         if mode == 'handGesture':
             img = gesture_control.process_frame(img)
-        
+
+        elif mode == 'faceRecognition':
+            img = process_face_recognition(img, data.get('username'))
+
+        elif mode == 'faceLogin':
+            username, img = handle_face_login(img)
+            if username:
+                session['username'] = username
+                print(f"Face login successful for {username}, session: {session}")
+                socketio.emit('face_login_success')
+            else:
+                print(f"Face login failed, session: {session}")
+                socketio.emit('face_login_failure')
+
         _, buffer = cv2.imencode('.jpg', img)
         frame = base64.b64encode(buffer).decode('utf-8')
-        emit('response_frame', {'image': frame})
+        socketio.emit('response_frame', {'image': frame})
 
     except Exception as e:
         print(f"Error handling frame: {e}")
+
+@app.after_request
+def after_request(response):
+    header = response.headers
+    header['Access-Control-Allow-Origin'] = 'http://localhost:3000'
+    header['Access-Control-Allow-Credentials'] = 'true'
+    header['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, PUT, DELETE'
+    header['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
 
 if __name__ == '__main__':
     socketio.run(app, debug=True)

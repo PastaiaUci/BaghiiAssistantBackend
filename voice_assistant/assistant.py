@@ -1,3 +1,5 @@
+# voice_assistant/assistant.py
+
 import pyttsx3
 import datetime
 import speech_recognition as sr
@@ -6,7 +8,7 @@ import webbrowser
 import pyjokes
 import pywhatkit as kit
 
-# Start the TTS engine
+
 engine = pyttsx3.init('sapi5')
 voices = engine.getProperty('voices')
 engine.setProperty('voice', voices[0].id)
@@ -89,6 +91,3 @@ def perform_task():
 def start_voice_assistant():
     wish_time()
     perform_task()
-
-
-start_voice_assistant()

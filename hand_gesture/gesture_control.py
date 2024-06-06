@@ -21,22 +21,18 @@ class GestureControl:
                 if self.last_known_hand_position is None:
                     self.last_known_hand_position = (x, y)
                 else:
-                    # Calculate relative movement
                     delta_x = x - self.last_known_hand_position[0]
                     delta_y = y - self.last_known_hand_position[1]
 
-                    # Invert the horizontal movement
                     cursor_x, cursor_y = pyautogui.position()
                     new_x = cursor_x - delta_x
                     new_y = cursor_y + delta_y
 
-                    # Move the cursor
                     pyautogui.moveTo(new_x, new_y)
 
-                    # Update last known position
                     self.last_known_hand_position = (x, y)
 
-                self.left_click_performed = False  # Reset click flag
+                self.left_click_performed = False 
 
             # Perform a left click when only the index finger is raised
             elif fingers == [0, 1, 0, 0, 0]:  # Only index finger raised
@@ -47,7 +43,7 @@ class GestureControl:
             # Perform a right click when the index and middle fingers are raised
             elif fingers == [0, 1, 1, 0, 0]:  # Index and middle fingers raised
                 pyautogui.click(button='right')
-                self.left_click_performed = False  # Reset click flag
+                self.left_click_performed = False
 
         else:
             self.last_known_hand_position = None
