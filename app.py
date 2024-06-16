@@ -1,10 +1,9 @@
-from flask import request, jsonify, session
-from flask_socketio import SocketIO
+from flask import Flask, request, jsonify, session
 from flask_pymongo import PyMongo
-from flask import Flask
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_session import Session
+from flask_socketio import SocketIO, emit
 import threading
 import subprocess
 import os
@@ -17,10 +16,7 @@ from hand_gesture.hand_track_module import HandDetector
 from hand_gesture.gesture_control import GestureControl
 from face_recognition_module.face_recognition_module import process_face_recognition, handle_face_login
 
-
 app = Flask(__name__)
-
-socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000")
 
 app.config['SECRET_KEY'] = 'supersecretkey'
 app.config['SESSION_TYPE'] = 'filesystem'
@@ -34,6 +30,7 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:3000"}})
 
 Session(app)
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:3000")
 
 voice_assistant_process = None
 last_known_hand_position = None
@@ -55,7 +52,7 @@ def add_user():
     if existing_user:
         return jsonify({"msg": "Username already exists"}), 400
 
-    user_data['password'] = generate_password_hash(user_data['password'])
+    user_data['password'] = user_data['password']
     mongo.db.users.insert_one(user_data)
     return jsonify({"msg": "User added successfully"}), 201
 
@@ -70,21 +67,17 @@ def login_user():
             return jsonify({"msg": "Username and password are required"}), 400
 
         user = mongo.db.users.find_one({'username': username})
-        
+
         if user:
-            if check_password_hash(user['password'], password):
+            if user['password'] ==  password:
                 session['username'] = user['username']
-                print(f"User {username} logged in successfully, session: {session}")
                 return jsonify({"msg": "Login successful"}), 200
             else:
-                print(f"Password mismatch for user {username}")
+                return jsonify({"msg": "Invalid username or password"}), 401
         else:
-            print(f"User {username} not found")
-
-        return jsonify({"msg": "Invalid username or password"}), 401
+            return jsonify({"msg": "Invalid username or password"}), 401
 
     except Exception as e:
-        print(f"Error during login: {e}")
         return jsonify({"msg": "Internal server error"}), 500
 
 @app.route('/logout', methods=['POST'])
@@ -95,7 +88,6 @@ def logout_user():
 @app.route('/session', methods=['GET'])
 def get_session():
     username = session.get('username')
-    print(f"Fetching session, session: {session}")
     if username:
         return jsonify({"username": username}), 200
     return jsonify({"msg": "No active session"}), 401
@@ -118,7 +110,7 @@ def stop_voice_assistant():
     global voice_assistant_process
     try:
         if voice_assistant_process is not None:
-            os.kill(voice_assistant_process.pid, signal.CTRL_BREAK_EVENT)
+            os.kill(voice_assistant_process.pid, signal.SIGTERM)
             voice_assistant_process = None
             return jsonify({"status": "Voice assistant stopped"}), 200
         else:
@@ -141,7 +133,7 @@ def monitor_voice_assistant():
 
 def start_voice_assistant_process():
     global voice_assistant_process
-    voice_assistant_process = subprocess.Popen(['python', 'voice_assistant/assistant.py'], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+    voice_assistant_process = subprocess.Popen(['python', 'assistant.py'], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
 
 gesture_control = GestureControl()
 
@@ -162,19 +154,22 @@ def handle_frame(data):
         elif mode == 'faceLogin':
             username, img = handle_face_login(img)
             if username:
+                user = mongo.db.users.find_one({'username': username})
+                emit('face_login_success', {'username': user['username'], 'password': user['password']})
                 session['username'] = username
-                print(f"Face login successful for {username}, session: {session}")
-                socketio.emit('face_login_success')
             else:
-                print(f"Face login failed, session: {session}")
-                socketio.emit('face_login_failure')
+                emit('face_login_failure')
 
         _, buffer = cv2.imencode('.jpg', img)
         frame = base64.b64encode(buffer).decode('utf-8')
-        socketio.emit('response_frame', {'image': frame})
+        emit('response_frame', {'image': frame})
 
     except Exception as e:
         print(f"Error handling frame: {e}")
+
+@socketio.on('assistant_message')
+def handle_assistant_message(data):
+    emit('assistant_message', data, broadcast=True)
 
 @app.after_request
 def after_request(response):
@@ -186,4 +181,6 @@ def after_request(response):
     return response
 
 if __name__ == '__main__':
+    if not os.path.exists(app.config['SESSION_FILE_DIR']):
+        os.makedirs(app.config['SESSION_FILE_DIR'])
     socketio.run(app, debug=True)
